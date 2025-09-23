@@ -4,8 +4,8 @@ from typing import Any
 from .settings import settings
 import httpx   # make sure this import is here!
 
-OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
-OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search" #
+OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive" #history
 
 
 async def geocode_city(client: httpx.AsyncClient, city: str) -> tuple[float, float, str]:

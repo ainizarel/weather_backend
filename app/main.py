@@ -31,7 +31,6 @@ async def healthz():
 )
 async def get_average_weather(
     city: str = Query(..., description="City name"),
-    # remove the hard 30-day limit; keep only ge=1
     days: int = Query(..., ge=1, description="Past days (>=1; capped by server config)")
 ):
     # Enforce configurable cap (0 disables)
