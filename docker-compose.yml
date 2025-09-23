@@ -1,0 +1,19 @@
+# docker-compose.yml (at your backend repo root)
+version: "3.9"
+services:
+  backend:
+    image: ghcr.io/ainizarel/weather-backend:latest
+    container_name: weather-backend
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS}   
+      - REDIS_URL=${REDIS_URL}      # optional caching
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: weather-redis
+    restart: unless-stopped

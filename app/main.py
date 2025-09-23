@@ -11,13 +11,12 @@ app = FastAPI(
     description="Returns average temperature (°C) for the last X days for a given city."
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.cors_origins],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# If you ever set CORS_ORIGINS="*", you can't use allow_credentials=True.
+cors_kwargs = dict(allow_methods=["*"], allow_headers=["*"])
+if settings.cors_origins == ["*"]:
+    app.add_middleware(CORSMiddleware, allow_origin_regex=".*", allow_credentials=False, **cors_kwargs)
+else:
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, **cors_kwargs)
 
 cache = Cache(settings.redis_url, default_ttl=120)
 
@@ -32,8 +31,13 @@ async def healthz():
 )
 async def get_average_weather(
     city: str = Query(..., description="City name"),
-    days: int = Query(..., ge=1, le=30, description="Past days (1–30)")
+    # remove the hard 30-day limit; keep only ge=1
+    days: int = Query(..., ge=1, description="Past days (>=1; capped by server config)")
 ):
+    # Enforce configurable cap (0 disables)
+    if settings.max_days and settings.max_days > 0 and days > settings.max_days:
+        raise HTTPException(status_code=422, detail=f"For 'days': must be ≤ {settings.max_days}.")
+
     key = f"avg:{city.lower()}:{days}"
     cached = await cache.aget(key)
     if cached:
@@ -46,8 +50,6 @@ async def get_average_weather(
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream weather provider error")
 
-    payload = AverageWeatherResponse(
-        city=canonical, days=days, average_temperature_c=avg
-    ).model_dump()
+    payload = AverageWeatherResponse(city=canonical, days=days, average_temperature_c=avg).model_dump()
     await cache.aset(key, payload, ttl=120)
     return payload
