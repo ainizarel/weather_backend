@@ -1,72 +1,49 @@
-from __future__ import annotations
+# app/main.py
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import datetime as dt
-from typing import Any
+
+from .schemas import AverageWeatherResponse
+from .weather import compute_average_temperature
+from .cache import Cache
 from .settings import settings
-import httpx   # make sure this import is here!
 
-OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search" #
-OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive" #history
+app = FastAPI(title="Weather Average API", version="0.1.0",
+              description="Returns average temperature (°C) for the last X days for a given city.")
 
+cors_kwargs = dict(allow_methods=["*"], allow_headers=["*"])
+if settings.cors_origins == ["*"]:
+    app.add_middleware(CORSMiddleware, allow_origin_regex=".*", allow_credentials=False, **cors_kwargs)
+else:
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, **cors_kwargs)
 
-async def geocode_city(client: httpx.AsyncClient, city: str) -> tuple[float, float, str]:
-    params = {"name": city, "count": 1}
-    r = await client.get(OPEN_METEO_GEOCODE, params=params, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-    results = data.get("results") or []
-    if not results:
-        raise ValueError("City not found")
-    top = results[0]
-    return float(top["latitude"]), float(top["longitude"]), top.get("name", city)
+cache = Cache(settings.redis_url, default_ttl=120)
 
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
-async def fetch_daily_means(client: httpx.AsyncClient, lat: float, lon: float, days: int) -> list[float]:
-    end = dt.date.today() - dt.timedelta(days=1)  # avoid partial current day
-    start = end - dt.timedelta(days=days - 1)
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-        # ask for all three so we can fall back if mean is null
-        "daily": ["temperature_2m_mean", "temperature_2m_max", "temperature_2m_min"],
-        "timezone": "auto",
-    }
-    r = await client.get(OPEN_METEO_ARCHIVE, params=params, timeout=30)
-    r.raise_for_status()
-    data: dict[str, Any] = r.json()
-    daily = data.get("daily") or {}
+@app.get("/weather/average", response_model=AverageWeatherResponse,
+         summary="Average temperature (°C) for last X days")
+async def get_average_weather(
+    city: str = Query(..., description="City name"),
+    days: int = Query(..., ge=1, description="Past days (≥1)"),
+    country: str | None = Query(None, min_length=2, max_length=2, description="ISO-2 country code"),
+):
+    # cache key includes the day your window ends (yesterday) to avoid drift
+    end_iso = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    key = f"avg:v1:{(country or '').upper()}:{city.strip().lower()}:{days}:end={end_iso}"
 
-    means = (daily.get("temperature_2m_mean") or []) or []
-    tmax  = (daily.get("temperature_2m_max")  or []) or []
-    tmin  = (daily.get("temperature_2m_min")  or []) or []
+    if cached := await cache.aget(key):
+        return AverageWeatherResponse(**cached)
 
-    temps: list[float] = []
-    for i in range(max(len(means), len(tmax), len(tmin))):
-        m = means[i] if i < len(means) else None
-        hi = tmax[i] if i < len(tmax) else None
-        lo = tmin[i] if i < len(tmin) else None
+    try:
+        canonical, avg = await compute_average_temperature(city, days, country=country)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Upstream weather provider error")
 
-        if m is not None:
-            temps.append(float(m))
-        elif hi is not None and lo is not None:
-            temps.append((float(hi) + float(lo)) / 2.0)
-        # else: skip day (all null)
-
-    if not temps:
-        raise ValueError("No temperature data available for the given range")
-
-    return temps
-
-
-async def compute_average_temperature(city: str, days: int) -> tuple[str, float]:
-    if days < 1:
-        raise ValueError("days must be ≥ 1")
-    if settings.max_days and settings.max_days > 0 and days > settings.max_days:
-        raise ValueError(f"days must be ≤ {settings.max_days}")
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-        lat, lon, canonical = await geocode_city(client, city)
-        temps = await fetch_daily_means(client, lat, lon, days)
-    avg = sum(temps) / len(temps)
-    return canonical, round(avg, 2)
+    payload = AverageWeatherResponse(city=canonical, days=days, average_temperature_c=avg).model_dump()
+    await cache.aset(key, payload, ttl=60 * 30)  # e.g., 30 min
+    return payload
