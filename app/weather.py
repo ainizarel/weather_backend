@@ -1,6 +1,7 @@
 from __future__ import annotations
 import datetime as dt
 from typing import Any
+from .settings import settings
 import httpx   # make sure this import is here!
 
 OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
@@ -59,9 +60,12 @@ async def fetch_daily_means(client: httpx.AsyncClient, lat: float, lon: float, d
 
 
 async def compute_average_temperature(city: str, days: int) -> tuple[str, float]:
-    if days < 1 or days > 30:
-        raise ValueError("days must be between 1 and 30")
-    async with httpx.AsyncClient() as client:
+    if days < 1:
+        raise ValueError("days must be ≥ 1")
+    if settings.max_days and settings.max_days > 0 and days > settings.max_days:
+        raise ValueError(f"days must be ≤ {settings.max_days}")
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
         lat, lon, canonical = await geocode_city(client, city)
         temps = await fetch_daily_means(client, lat, lon, days)
     avg = sum(temps) / len(temps)
