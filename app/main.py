@@ -14,9 +14,11 @@ app = FastAPI(
 # If you ever set CORS_ORIGINS="*", you can't use allow_credentials=True.
 cors_kwargs = dict(allow_methods=["*"], allow_headers=["*"])
 if settings.cors_origins == ["*"]:
+    # Wildcard cannot be used with credentials
     app.add_middleware(CORSMiddleware, allow_origin_regex=".*", allow_credentials=False, **cors_kwargs)
 else:
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, **cors_kwargs)
+
 
 cache = Cache(settings.redis_url, default_ttl=120)
 
