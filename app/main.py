@@ -11,12 +11,27 @@ app = FastAPI(
     description="Returns average temperature (°C) for the last X days for a given city."
 )
 
-# If you ever set CORS_ORIGINS="*", you can't use allow_credentials=True.
-cors_kwargs = dict(allow_methods=["*"], allow_headers=["*"])
-if settings.cors_origins == ["*"]:
-    app.add_middleware(CORSMiddleware, allow_origin_regex=".*", allow_credentials=False, **cors_kwargs)
+# Build CORS config
+cors_common = dict(allow_methods=["*"], allow_headers=["*"])
+allow_all = settings.cors_origins == ["*"] or "*" in settings.cors_origins
+
+if allow_all:
+    # If you allow everyone, credentials MUST be False
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=False,
+        **cors_common,
+    )
 else:
-    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, **cors_kwargs)
+    # Exact origins from env + any *.vercel.app preview
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_origin_regex=r"https://.*\.vercel\.app$",
+        allow_credentials=True,
+        **cors_common,
+    )
 
 cache = Cache(settings.redis_url, default_ttl=120)
 
